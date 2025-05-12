@@ -21,8 +21,9 @@ app.include_router(auth.router, prefix="/auth")
 origins = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "https://noteai-frontend.vercel.app ",  # Removed trailing space
-    "https://noteai-frontend.netlify.app "
+    "https://noteai-frontend.vercel.app",
+    "https://noteai-frontend.netlify.app",
+    "https://noteai1-production.up.railway.app"
 ]
 
 app.add_middleware(
