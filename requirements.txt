@@ -4,7 +4,7 @@ uvicorn==0.27.1
 python-multipart==0.0.6
 
 # Audio Processing
-openai-whisper==20231106
+openai-whisper
 torchaudio==2.2.1
 torch==2.2.1
 pydub==0.25.1
