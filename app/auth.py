@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
 from pymongo import MongoClient
 from passlib.context import CryptContext
@@ -12,13 +12,9 @@ import requests
 # Load environment variables from .env
 load_dotenv()
 
-# Initialize router
 router = APIRouter()
 
-# ---------------------------
 # Configuration
-# ---------------------------
-
 SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret-key-for-dev")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
@@ -36,28 +32,22 @@ except Exception as e:
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# ---------------------------
 # Models
-# ---------------------------
-
 class AuthData(BaseModel):
     email: EmailStr
     password: str
 
-# ---------------------------
-# Helpers
-# ---------------------------
+class GoogleToken(BaseModel):
+    token: str
 
+# Helper
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-# ---------------------------
 # Routes
-# ---------------------------
-
 @router.post("/register")
 def register_user(data: AuthData):
     existing_user = users_collection.find_one({"email": data.email})
@@ -69,7 +59,6 @@ def register_user(data: AuthData):
     result = users_collection.insert_one(user)
 
     token = create_access_token({"sub": data.email})
-
     return {
         "user_id": str(result.inserted_id),
         "email": data.email,
@@ -90,42 +79,31 @@ def login_user(data: AuthData):
     }
 
 @router.post("/google")
-async def google_auth(request: Request):
-    try:
-        body = await request.json()
-        print("📥 BODY REÇU PAR FASTAPI:", body)
+def google_auth(data: GoogleToken):
+    credential = data.token  # ✅ correspond maintenant à { "token": "..." }
 
-        if "credential" not in body:
-            raise HTTPException(status_code=400, detail="Champ 'credential' manquant")
+    GOOGLE_TOKEN_INFO_URL = "https://oauth2.googleapis.com/tokeninfo"
+    response = requests.get(GOOGLE_TOKEN_INFO_URL, params={"id_token": credential})
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
 
-        credential = body["credential"]
+    user_info = response.json()
+    email = user_info.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email not found in Google token")
 
-        GOOGLE_TOKEN_INFO_URL = "https://oauth2.googleapis.com/tokeninfo"
-        response = requests.get(GOOGLE_TOKEN_INFO_URL, params={"id_token": credential})
-        if response.status_code != 200:
-            raise HTTPException(status_code=401, detail="Invalid Google token")
+    user = users_collection.find_one({"email": email})
+    if not user:
+        new_user = {"email": email, "password": None}
+        result = users_collection.insert_one(new_user)
+        user_id = str(result.inserted_id)
+    else:
+        user_id = str(user["_id"])
 
-        user_info = response.json()
-        email = user_info.get("email")
-        if not email:
-            raise HTTPException(status_code=400, detail="Email not found in Google token")
+    jwt_token = create_access_token({"sub": email})
 
-        user = users_collection.find_one({"email": email})
-        if not user:
-            new_user = {"email": email, "password": None}
-            result = users_collection.insert_one(new_user)
-            user_id = str(result.inserted_id)
-        else:
-            user_id = str(user["_id"])
-
-        jwt_token = create_access_token({"sub": email})
-
-        return {
-            "user_id": user_id,
-            "email": email,
-            "token": jwt_token
-        }
-
-    except Exception as e:
-        print("❌ ERREUR côté backend:", e)
-        raise HTTPException(status_code=422, detail="Erreur lors de l’analyse du token Google")
+    return {
+        "user_id": user_id,
+        "email": email,
+        "token": jwt_token
+    }
