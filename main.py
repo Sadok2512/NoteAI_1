@@ -24,7 +24,8 @@ origins = [
     "https://noteai-frontend.vercel.app",
     "https://noteai-frontend.netlify.app",
     "https://noteai1-production.up.railway.app",
-    "https://noteai2512.netlify.app"
+    "https://noteai2512.netlify.app",
+    "https://noteai-205095.netlify.app",  # 👈 ton domaine Netlify actif
 ]
 
 app.add_middleware(
@@ -33,9 +34,6 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_origins=["https://noteai-205095.netlify.app"],  # 👈 ton domaine Netlify
-    allow_credentials=True,
-
 )
 
 # ----------------------
