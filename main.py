@@ -24,6 +24,7 @@ origins = [
     "https://noteai-frontend.vercel.app",
     "https://noteai-frontend.netlify.app",
     "https://noteai1-production.up.railway.app"
+    "https://noteai2512.netlify.app"
 ]
 
 app.add_middleware(
