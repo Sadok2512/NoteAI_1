@@ -33,6 +33,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origins=["https://noteai-205095.netlify.app"],  # 👈 ton domaine Netlify
+    allow_credentials=True,
+
 )
 
 # ----------------------
