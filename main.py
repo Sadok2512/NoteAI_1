@@ -6,13 +6,22 @@ import datetime, json, whisper
 from pymongo import MongoClient
 import gridfs
 from bson import ObjectId
+from fastapi.responses import StreamingResponse
 
 # --- Setup ---
-app = FastAPI(title="NoteAI + MongoDB GridFS")
+app = FastAPI(title="NoteAI + MongoDB GridFS + Auth")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
 )
+
+# --- Auth Router (si disponible) ---
+try:
+    from app import auth
+    app.include_router(auth.router, prefix="/auth")
+    print("✅ Module auth chargé.")
+except ImportError:
+    print("⚠️ Module 'auth' non trouvé. Auth désactivée.")
 
 # --- MongoDB Connection ---
 client = MongoClient("mongodb+srv://sadokbenali:CuB9RsvafoZ2IZyj@noteai.odx94om.mongodb.net/?retryWrites=true&w=majority&appName=NoteAI")
@@ -32,7 +41,6 @@ class NoteMetadata(BaseModel):
     summary: Optional[str] = ""
     tasks: Optional[List[str]] = []
 
-# --- Upload Route ---
 @app.post("/upload-audio")
 async def upload_audio(file: UploadFile = File(...)):
     content = await file.read()
@@ -49,7 +57,6 @@ async def upload_audio(file: UploadFile = File(...)):
     notes_collection.insert_one(metadata)
     return {"message": "Fichier uploadé", "file_id": str(file_id)}
 
-# --- Transcription Route ---
 @app.post("/transcribe/{file_id}")
 async def transcribe_audio(file_id: str):
     try:
@@ -58,20 +65,16 @@ async def transcribe_audio(file_id: str):
         temp_path = f"/tmp/{file_id}.webm"
         with open(temp_path, "wb") as f:
             f.write(audio_data)
-
         result = model.transcribe(temp_path)
         transcription = result["text"]
-
         notes_collection.update_one(
             {"_id": file_id},
             {"$set": {"transcription": transcription}}
         )
-
         return {"message": "Transcription réussie", "transcription": transcription}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Obtenir les métadonnées ---
 @app.get("/note-details/{file_id}", response_model=NoteMetadata)
 async def get_note_details(file_id: str):
     note = notes_collection.find_one({"_id": file_id})
@@ -86,19 +89,12 @@ async def get_note_details(file_id: str):
         "tasks": note.get("tasks", [])
     }
 
-# --- Route /history/{user_email} (fallback compatibilité frontend) ---
 @app.get("/history/{user_email}")
 async def get_user_history(user_email: str):
     notes = list(notes_collection.find({"filename": {"$exists": True}}))
     for note in notes:
         note["_id"] = str(note["_id"])
     return notes
-
-@app.get("/")
-def root():
-    return {"message": "NoteAI + MongoDB GridFS backend is running"}
-
-from fastapi.responses import StreamingResponse
 
 @app.get("/audio/{file_id}")
 def stream_audio(file_id: str):
@@ -107,3 +103,7 @@ def stream_audio(file_id: str):
         return StreamingResponse(grid_out, media_type="audio/webm")
     except:
         raise HTTPException(status_code=404, detail="Fichier audio non trouvé")
+
+@app.get("/")
+def root():
+    return {"message": "NoteAI + MongoDB GridFS backend is running"}
