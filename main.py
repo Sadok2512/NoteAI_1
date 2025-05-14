@@ -97,3 +97,13 @@ async def get_user_history(user_email: str):
 @app.get("/")
 def root():
     return {"message": "NoteAI + MongoDB GridFS backend is running"}
+
+from fastapi.responses import StreamingResponse
+
+@app.get("/audio/{file_id}")
+def stream_audio(file_id: str):
+    try:
+        grid_out = fs.get(ObjectId(file_id))
+        return StreamingResponse(grid_out, media_type="audio/webm")
+    except:
+        raise HTTPException(status_code=404, detail="Fichier audio non trouvé")
