@@ -15,7 +15,7 @@ app.add_middleware(
 )
 
 # --- MongoDB Connection ---
-client = MongoClient("mongodb+srv://<your_username>:<your_password>@<cluster_url>/")
+client = MongoClient("MONGO_URI=mongodb+srv://sadokbenali:CuB9RsvafoZ2IZyj@noteai.odx94om.mongodb.net/?retryWrites=true&w=majority&appName=NoteAI")
 db = client["noteai"]
 fs = gridfs.GridFS(db)
 notes_collection = db["notes"]
