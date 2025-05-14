@@ -55,7 +55,6 @@ async def transcribe_audio(file_id: str):
     try:
         grid_out = fs.get(ObjectId(file_id))
         audio_data = grid_out.read()
-        # Écrire dans un fichier temporaire pour Whisper
         temp_path = f"/tmp/{file_id}.webm"
         with open(temp_path, "wb") as f:
             f.write(audio_data)
@@ -63,7 +62,6 @@ async def transcribe_audio(file_id: str):
         result = model.transcribe(temp_path)
         transcription = result["text"]
 
-        # Mettre à jour la note
         notes_collection.update_one(
             {"_id": file_id},
             {"$set": {"transcription": transcription}}
@@ -87,6 +85,14 @@ async def get_note_details(file_id: str):
         "summary": note.get("summary", ""),
         "tasks": note.get("tasks", [])
     }
+
+# --- Route /history/{user_email} (fallback compatibilité frontend) ---
+@app.get("/history/{user_email}")
+async def get_user_history(user_email: str):
+    notes = list(notes_collection.find({"filename": {"$exists": True}}))
+    for note in notes:
+        note["_id"] = str(note["_id"])
+    return notes
 
 @app.get("/")
 def root():
