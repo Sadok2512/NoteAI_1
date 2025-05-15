@@ -92,9 +92,17 @@ async def get_note_details(file_id: str):
 @app.get("/history/{user_email}")
 async def get_user_history(user_email: str):
     notes = list(notes_collection.find({"filename": {"$exists": True}}))
+    cleaned_notes = []
     for note in notes:
-        note["_id"] = str(note["_id"])
-    return notes
+        cleaned_notes.append({
+            "id": str(note.get("_id", "")),
+            "filename": note.get("filename", ""),
+            "uploaded_at": note.get("uploaded_at", ""),
+            "transcription": note.get("transcription", ""),
+            "summary": note.get("summary", ""),
+            "tasks": note.get("tasks", [])
+        })
+    return cleaned_notes
 
 @app.get("/audio/{file_id}")
 def stream_audio(file_id: str):
