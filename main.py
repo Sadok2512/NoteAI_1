@@ -80,9 +80,10 @@ async def upload_audio(
         temp_path = f"/tmp/{file_id_str}.webm"
         with open(temp_path, "wb") as f:
             f.write(content)
-        result = model.transcribe(temp_path)
-        transcription = result["text"]
-        os.remove(temp_path)
+           
+    transcription = "[Transcription désactivée pour test]"      
+
+os.remove(temp_path)
 
         metadata = {
             "_id": file_id_str,
