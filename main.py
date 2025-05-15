@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 OPENROUTER_API_KEY = "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"
 
-app = FastAPI(title="NoteAI + OpenRouter Summary & Tasks")
+app = FastAPI(title="NoteAI + OpenRouter + User Filter")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
@@ -25,6 +25,7 @@ model = whisper.load_model("base")
 
 class NoteMetadata(BaseModel):
     id: str
+    user_id: str
     filename: str
     uploaded_at: str
     transcription: Optional[str] = ""
@@ -52,7 +53,7 @@ def ask_openrouter(transcription: str, prompt: str) -> str:
         return "Non disponible."
 
 @app.post("/upload-audio")
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_audio(file: UploadFile = File(...), user_id: str = Form(...)):
     try:
         content = await file.read()
         file_id = fs.put(content, filename=file.filename, content_type=file.content_type)
@@ -66,11 +67,11 @@ async def upload_audio(file: UploadFile = File(...)):
 
         summary = ask_openrouter(transcription, "Fais un résumé clair et concis de cette transcription.")
         tasks_text = ask_openrouter(transcription, "Liste les tâches/actions importantes détectées, sous forme de liste à puces.")
-
         tasks = [t.strip("- ").strip() for t in tasks_text.split("\n") if t.strip()]
 
         metadata = {
             "_id": str(file_id),
+            "user_id": user_id,
             "filename": file.filename,
             "uploaded_at": datetime.datetime.utcnow().isoformat(),
             "transcription": transcription,
@@ -78,7 +79,7 @@ async def upload_audio(file: UploadFile = File(...)):
             "tasks": tasks
         }
         notes_collection.insert_one(metadata)
-        print(f"✅ Upload + transcription + résumé + tâches : {file.filename}")
+        print(f"✅ Upload + résumé + tâches pour {file.filename}")
         return {
             "message": "Fichier traité avec succès",
             "file_id": str(file_id),
@@ -97,6 +98,7 @@ async def get_note_details(file_id: str):
         raise HTTPException(status_code=404, detail="Note introuvable")
     return {
         "id": note["_id"],
+        "user_id": note.get("user_id", ""),
         "filename": note["filename"],
         "uploaded_at": note["uploaded_at"],
         "transcription": note.get("transcription", ""),
@@ -106,10 +108,11 @@ async def get_note_details(file_id: str):
 
 @app.get("/history/{user_email}")
 async def get_user_history(user_email: str):
-    notes = list(notes_collection.find({"filename": {"$exists": True}}))
+    notes = list(notes_collection.find({"user_id": user_email}))
     return [
         {
             "id": str(note.get("_id", "")),
+            "user_id": note.get("user_id", ""),
             "filename": note.get("filename", ""),
             "uploaded_at": note.get("uploaded_at", ""),
             "transcription": note.get("transcription", ""),
@@ -129,4 +132,4 @@ def stream_audio(file_id: str):
 
 @app.get("/")
 def root():
-    return {"message": "NoteAI backend with OpenRouter summary + tasks"}
+    return {"message": "NoteAI backend with OpenRouter summary + user filter"}
