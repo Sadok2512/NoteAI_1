@@ -43,37 +43,24 @@ class NoteMetadata(BaseModel):
 
 @app.post("/upload-audio")
 async def upload_audio(file: UploadFile = File(...)):
-    content = await file.read()
-    file_id = fs.put(content, filename=file.filename, content_type=file.content_type)
-
-    metadata = {
-        "_id": str(file_id),
-        "filename": file.filename,
-        "uploaded_at": datetime.datetime.utcnow().isoformat(),
-        "transcription": "En attente...",
-        "summary": "",
-        "tasks": []
-    }
-    notes_collection.insert_one(metadata)
-    return {"message": "Fichier uploadé", "file_id": str(file_id)}
-
-@app.post("/transcribe/{file_id}")
-async def transcribe_audio(file_id: str):
     try:
-        grid_out = fs.get(ObjectId(file_id))
-        audio_data = grid_out.read()
-        temp_path = f"/tmp/{file_id}.webm"
-        with open(temp_path, "wb") as f:
-            f.write(audio_data)
-        result = model.transcribe(temp_path)
-        transcription = result["text"]
-        notes_collection.update_one(
-            {"_id": file_id},
-            {"$set": {"transcription": transcription}}
-        )
-        return {"message": "Transcription réussie", "transcription": transcription}
+        content = await file.read()
+        file_id = fs.put(content, filename=file.filename, content_type=file.content_type)
+
+        metadata = {
+            "_id": str(file_id),
+            "filename": file.filename,
+            "uploaded_at": datetime.datetime.utcnow().isoformat(),
+            "transcription": "En attente...",
+            "summary": "",
+            "tasks": []
+        }
+        notes_collection.insert_one(metadata)
+        print(f"✅ Upload réussi : ID = {file_id} | Nom fichier = {file.filename}")
+        return {"message": "Fichier uploadé", "file_id": str(file_id)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"❌ Erreur upload: {e}")
+        raise HTTPException(status_code=500, detail="Erreur d'upload")
 
 @app.get("/note-details/{file_id}", response_model=NoteMetadata)
 async def get_note_details(file_id: str):
@@ -94,14 +81,20 @@ async def get_user_history(user_email: str):
     notes = list(notes_collection.find({"filename": {"$exists": True}}))
     cleaned_notes = []
     for note in notes:
+        note_id = str(note.get("_id", ""))
+        filename = note.get("filename", "")
+        if not filename:
+            print(f"⚠️ Note sans filename pour _id={note_id}")
+            continue
         cleaned_notes.append({
-            "id": str(note.get("_id", "")),
-            "filename": note.get("filename", ""),
+            "id": note_id,
+            "filename": filename,
             "uploaded_at": note.get("uploaded_at", ""),
             "transcription": note.get("transcription", ""),
             "summary": note.get("summary", ""),
             "tasks": note.get("tasks", [])
         })
+    print(f"✅ /history : {len(cleaned_notes)} notes trouvées")
     return cleaned_notes
 
 @app.get("/audio/{file_id}")
@@ -111,6 +104,24 @@ def stream_audio(file_id: str):
         return StreamingResponse(grid_out, media_type="audio/webm")
     except:
         raise HTTPException(status_code=404, detail="Fichier audio non trouvé")
+
+@app.post("/transcribe/{file_id}")
+async def transcribe_audio(file_id: str):
+    try:
+        grid_out = fs.get(ObjectId(file_id))
+        audio_data = grid_out.read()
+        temp_path = f"/tmp/{file_id}.webm"
+        with open(temp_path, "wb") as f:
+            f.write(audio_data)
+        result = model.transcribe(temp_path)
+        transcription = result["text"]
+        notes_collection.update_one(
+            {"_id": file_id},
+            {"$set": {"transcription": transcription}}
+        )
+        return {"message": "Transcription réussie", "transcription": transcription}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 def root():
