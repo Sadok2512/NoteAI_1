@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 OPENROUTER_API_KEY = "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"
 
 # --- Setup ---
-app = FastAPI(title="NoteAI + MongoDB GridFS + Auth + OpenRouter")
+app = FastAPI(title="NoteAI Split Processing")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
@@ -35,7 +35,6 @@ notes_collection = db["notes"]
 # --- Whisper Model ---
 model = whisper.load_model("base")
 
-# --- Pydantic Models ---
 class NoteMetadataResponse(BaseModel):
     id: str
     user_id: str
@@ -89,10 +88,6 @@ async def upload_audio(
         transcription = result["text"]
         os.remove(temp_path)
 
-        summary = ask_openrouter(transcription, "Fais un résumé clair et concis de cette transcription.")
-        tasks_text = ask_openrouter(transcription, "Liste les tâches/actions importantes détectées, sous forme de liste à puces.")
-        tasks = [t.strip("- ").strip() for t in tasks_text.split("\n") if t.strip()]
-
         metadata = {
             "_id": file_id_str,
             "user_id": user_id,
@@ -103,29 +98,53 @@ async def upload_audio(
             "content_type": file.content_type,
             "size_bytes": file_size,
             "transcription": transcription,
-            "summary": summary,
-            "tasks": tasks
+            "summary": "À traiter",
+            "tasks": []
         }
 
         notes_collection.insert_one(metadata)
         return {
-            "message": "Fichier téléversé et traité",
+            "message": "Fichier téléversé et transcrit",
             "metadata": metadata
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/history/{user_email}", response_model=List[NoteMetadataResponse])
-async def get_user_history(user_email: str):
-    notes = notes_collection.find({"user_id": user_email}).sort("uploaded_at", -1)
-    return [NoteMetadataResponse(**{**note, "id": str(note["_id"])}) for note in notes]
+@app.post("/process-summary/{file_id}")
+def process_summary(file_id: str):
+    note = notes_collection.find_one({"_id": file_id})
+    if not note:
+        raise HTTPException(status_code=404, detail="Note introuvable")
+    transcription = note.get("transcription", "")
+    if not transcription:
+        raise HTTPException(status_code=400, detail="Pas de transcription trouvée.")
+
+    summary = ask_openrouter(transcription, "Fais un résumé clair et concis de cette transcription.")
+    tasks_text = ask_openrouter(transcription, "Liste les tâches/actions importantes détectées, sous forme de liste à puces.")
+    tasks = [t.strip("- ").strip() for t in tasks_text.split("\n") if t.strip()]
+
+    notes_collection.update_one(
+        {"_id": file_id},
+        {"$set": {"summary": summary, "tasks": tasks}}
+    )
+
+    return {
+        "message": "Résumé et tâches générés.",
+        "summary": summary,
+        "tasks": tasks
+    }
 
 @app.get("/note-details/{file_id}", response_model=NoteMetadataResponse)
-async def get_note_details(file_id: str):
+def get_note_details(file_id: str):
     note = notes_collection.find_one({"_id": file_id})
     if not note:
         raise HTTPException(status_code=404, detail="Note introuvable")
     return NoteMetadataResponse(**{**note, "id": str(note["_id"])})
+
+@app.get("/history/{user_email}", response_model=List[NoteMetadataResponse])
+def get_history(user_email: str):
+    notes = notes_collection.find({"user_id": user_email}).sort("uploaded_at", -1)
+    return [NoteMetadataResponse(**{**n, "id": str(n["_id"])}) for n in notes]
 
 @app.get("/audio/{file_id}")
 def stream_audio(file_id: str):
@@ -139,4 +158,4 @@ def stream_audio(file_id: str):
 
 @app.get("/")
 def root():
-    return {"message": "NoteAI backend complet avec Auth, Whisper, OpenRouter, MongoDB"}
+    return {"message": "Backend NoteAI avec Whisper et traitement résumé différé"}
