@@ -8,17 +8,14 @@ import gridfs
 from bson import ObjectId
 from fastapi.responses import StreamingResponse
 
-# --- OpenRouter API Key ---
 OPENROUTER_API_KEY = "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"
 
-# --- Setup ---
 app = FastAPI(title="NoteAI Split Processing")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
 )
 
-# --- Auth Router ---
 try:
     from app import auth
     app.include_router(auth.router, prefix="/auth")
@@ -26,13 +23,11 @@ try:
 except ImportError:
     print("⚠️ Module 'auth' non trouvé. Auth désactivée.")
 
-# --- MongoDB ---
 client = MongoClient("mongodb+srv://sadokbenali:CuB9RsvafoZ2IZyj@noteai.odx94om.mongodb.net/?retryWrites=true&w=majority&appName=NoteAI")
 db = client["noteai"]
 fs = gridfs.GridFS(db)
 notes_collection = db["notes"]
 
-# --- Whisper Model ---
 model = whisper.load_model("base")
 
 class NoteMetadataResponse(BaseModel):
@@ -47,6 +42,7 @@ class NoteMetadataResponse(BaseModel):
     size_bytes: Optional[int] = None
     custom_name: Optional[str] = None
     comment: Optional[str] = None
+    source: Optional[str] = "WEB"
 
 def ask_openrouter(transcription: str, prompt: str) -> str:
     try:
@@ -99,7 +95,8 @@ async def upload_audio(
             "size_bytes": file_size,
             "transcription": transcription,
             "summary": "À traiter",
-            "tasks": []
+            "tasks": [],
+            "source": "WEB"
         }
 
         notes_collection.insert_one(metadata)
@@ -158,4 +155,4 @@ def stream_audio(file_id: str):
 
 @app.get("/")
 def root():
-    return {"message": "Backend NoteAI avec Whisper et traitement résumé différé"}
+    return {"message": "Backend NoteAI avec Whisper, résumé différé et champ source"}
