@@ -55,12 +55,32 @@ async def upload_audio(file: UploadFile = File(...)):
             "summary": "",
             "tasks": []
         }
-        notes_collection.insert_one(metadata)
-        print(f"✅ Upload réussi : ID = {file_id} | Nom fichier = {file.filename}")
+
+        result = notes_collection.insert_one(metadata)
+        print(f"✅ Fichier inséré avec _id={result.inserted_id}, nom={file.filename}")
+
         return {"message": "Fichier uploadé", "file_id": str(file_id)}
     except Exception as e:
         print(f"❌ Erreur upload: {e}")
         raise HTTPException(status_code=500, detail="Erreur d'upload")
+
+@app.post("/transcribe/{file_id}")
+async def transcribe_audio(file_id: str):
+    try:
+        grid_out = fs.get(ObjectId(file_id))
+        audio_data = grid_out.read()
+        temp_path = f"/tmp/{file_id}.webm"
+        with open(temp_path, "wb") as f:
+            f.write(audio_data)
+        result = model.transcribe(temp_path)
+        transcription = result["text"]
+        notes_collection.update_one(
+            {"_id": file_id},
+            {"$set": {"transcription": transcription}}
+        )
+        return {"message": "Transcription réussie", "transcription": transcription}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/note-details/{file_id}", response_model=NoteMetadata)
 async def get_note_details(file_id: str):
@@ -104,24 +124,6 @@ def stream_audio(file_id: str):
         return StreamingResponse(grid_out, media_type="audio/webm")
     except:
         raise HTTPException(status_code=404, detail="Fichier audio non trouvé")
-
-@app.post("/transcribe/{file_id}")
-async def transcribe_audio(file_id: str):
-    try:
-        grid_out = fs.get(ObjectId(file_id))
-        audio_data = grid_out.read()
-        temp_path = f"/tmp/{file_id}.webm"
-        with open(temp_path, "wb") as f:
-            f.write(audio_data)
-        result = model.transcribe(temp_path)
-        transcription = result["text"]
-        notes_collection.update_one(
-            {"_id": file_id},
-            {"$set": {"transcription": transcription}}
-        )
-        return {"message": "Transcription réussie", "transcription": transcription}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 def root():
