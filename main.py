@@ -1,194 +1,132 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form # Assurez-vous que Form est importé
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel # Nécessaire pour response_model
+from pydantic import BaseModel
 from typing import Optional, List
-import datetime, json, whisper
+import datetime, whisper, os, requests
 from pymongo import MongoClient
 import gridfs
 from bson import ObjectId
 from fastapi.responses import StreamingResponse
 
-# --- Setup ---
-app = FastAPI(title="NoteAI + MongoDB GridFS + Auth")
+OPENROUTER_API_KEY = "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"
+
+app = FastAPI(title="NoteAI + OpenRouter Summary & Tasks")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
 )
 
-# --- Auth Router (si disponible) ---
-try:
-    from app import auth # Si vous avez un module d'authentification
-    app.include_router(auth.router, prefix="/auth")
-    print("✅ Module auth chargé.")
-except ImportError:
-    print("⚠️ Module 'auth' non trouvé. Auth désactivée pour l'instant.") # Ou considérez de le rendre obligatoire
-
-# --- MongoDB Connection ---
-# Assurez-vous que la chaîne de connexion est sécurisée (par ex. variables d'environnement)
-MONGO_CONNECTION_STRING = "mongodb+srv://sadokbenali:CuB9RsvafoZ2IZyj@noteai.odx94om.mongodb.net/?retryWrites=true&w=majority&appName=NoteAI"
-client = MongoClient(MONGO_CONNECTION_STRING)
+client = MongoClient("mongodb+srv://sadokbenali:CuB9RsvafoZ2IZyj@noteai.odx94om.mongodb.net/?retryWrites=true&w=majority&appName=NoteAI")
 db = client["noteai"]
 fs = gridfs.GridFS(db)
-notes_collection = db["notes"] # Collection pour les métadonnées des notes
+notes_collection = db["notes"]
 
-# --- Whisper Model ---
-# model = whisper.load_model("base") # Chargez-le si nécessaire, ou à la demande.
+model = whisper.load_model("base")
 
-# --- Pydantic Models ---
-class NoteMetadataResponse(BaseModel): # Renommé pour clarté, utilisé pour les réponses
-    id: str # C'est le file_id de GridFS, aussi _id dans notes_collection
-    user_id: str # Ajouté
+class NoteMetadata(BaseModel):
+    id: str
     filename: str
-    uploaded_at: str # Devrait être datetime, mais string si c'est ce que vous stockez/renvoyez
-    content_type: Optional[str] = None # Ajouté
+    uploaded_at: str
     transcription: Optional[str] = ""
     summary: Optional[str] = ""
     tasks: Optional[List[str]] = []
-    size_bytes: Optional[int] = None # Ajouté
+
+def ask_openrouter(transcription: str, prompt: str) -> str:
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        body = {
+            "model": "openai/gpt-3.5-turbo",
+            "messages": [
+                {"role": "system", "content": "Tu es un assistant médical et organisationnel."},
+                {"role": "user", "content": f"{prompt}\n\nTexte :\n{transcription}"}
+            ]
+        }
+        response = requests.post("https://openrouter.ai/api/v1/chat/completions", json=body, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"⚠️ Erreur OpenRouter : {e}")
+        return "Non disponible."
 
 @app.post("/upload-audio")
-async def upload_audio(
-    file: UploadFile = File(...),
-    user_id: str = Form(...) # (1) RECEVOIR user_id du formulaire
-):
-    print(f"➡️ /upload-audio REQUÊTE Reçue pour user_id: {user_id}, fichier: {file.filename}")
+async def upload_audio(file: UploadFile = File(...)):
     try:
         content = await file.read()
-        file_size = len(content) # Obtenir la taille du fichier
+        file_id = fs.put(content, filename=file.filename, content_type=file.content_type)
 
-        # Sauvegarder le fichier dans GridFS
-        file_id_obj = fs.put(
-            content,
-            filename=file.filename,
-            content_type=file.content_type,
-            user_id=user_id # (Optionnel) Vous pouvez aussi stocker user_id dans les métadonnées de GridFS
-        )
-        file_id_str = str(file_id_obj)
-        print(f"💾 Fichier sauvegardé dans GridFS avec ID: {file_id_str}")
+        temp_path = f"/tmp/{file_id}.webm"
+        with open(temp_path, "wb") as f:
+            f.write(content)
+        result = model.transcribe(temp_path)
+        transcription = result["text"]
+        os.remove(temp_path)
 
-        # Préparer les métadonnées pour la collection 'notes'
+        summary = ask_openrouter(transcription, "Fais un résumé clair et concis de cette transcription.")
+        tasks_text = ask_openrouter(transcription, "Liste les tâches/actions importantes détectées, sous forme de liste à puces.")
+
+        tasks = [t.strip("- ").strip() for t in tasks_text.split("\n") if t.strip()]
+
         metadata = {
-            "_id": file_id_str,  # Utiliser l'ID de GridFS comme _id dans la collection notes
-            "user_id": user_id,       # (2) INCLURE user_id
+            "_id": str(file_id),
             "filename": file.filename,
             "uploaded_at": datetime.datetime.utcnow().isoformat(),
-            "content_type": file.content_type, # Stocker le type de contenu
-            "size_bytes": file_size, # Stocker la taille du fichier
-            "transcription": "En attente...",
-            "summary": "",
-            "tasks": []
+            "transcription": transcription,
+            "summary": summary,
+            "tasks": tasks
         }
-        print(f"📝 Métadonnées préparées pour MongoDB: {metadata}")
-
-        # Insérer les métadonnées dans la collection 'notes'
-        result = notes_collection.insert_one(metadata)
-        # 'result.inserted_id' sera le même que 'file_id_str' car nous l'avons défini pour '_id'
-        print(f"✅ Métadonnées insérées dans 'notes' avec _id={result.inserted_id} (devrait être {file_id_str})")
-
-        # Renvoyer une réponse détaillée
+        notes_collection.insert_one(metadata)
+        print(f"✅ Upload + transcription + résumé + tâches : {file.filename}")
         return {
-            "message": "Fichier téléversé et note créée avec succès",
-            "metadata": { # Renvoyer les métadonnées pour que le frontend puisse les afficher
-                "id": file_id_str,
-                "user_id": user_id,
-                "filename": file.filename,
-                "uploaded_at": metadata["uploaded_at"],
-                "content_type": file.content_type,
-                "size_bytes": file_size,
-                "transcription": metadata["transcription"]
-            }
+            "message": "Fichier traité avec succès",
+            "file_id": str(file_id),
+            "transcription": transcription,
+            "summary": summary,
+            "tasks": tasks
         }
     except Exception as e:
-        print(f"❌ Erreur critique dans /upload-audio pour user_id {user_id}, fichier {file.filename}: {e}")
-        import traceback
-        traceback.print_exc() # Imprimer la trace complète de l'erreur pour un meilleur débogage
-        raise HTTPException(status_code=500, detail=f"Erreur interne du serveur lors du téléversement: {str(e)}")
+        print(f"❌ Erreur traitement complet : {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/history/{user_email}", response_model=List[NoteMetadataResponse]) # (3) Utiliser le modèle de réponse
-async def get_user_history(user_email: str):
-    print(f"➡️ /history REQUÊTE Reçue pour user_email: {user_email}")
-    try:
-        # (4) FILTRER par user_id (qui est user_email ici)
-        user_notes_cursor = notes_collection.find({"user_id": user_email}).sort("uploaded_at", -1) # Trier par date, plus récent en premier
-        
-        history_list = []
-        for note in user_notes_cursor:
-            history_list.append(NoteMetadataResponse(
-                id=str(note["_id"]), # Assurez-vous que c'est une chaîne
-                user_id=note["user_id"],
-                filename=note["filename"],
-                uploaded_at=note["uploaded_at"], # Assurez-vous que le format est correct ou convertissez
-                content_type=note.get("content_type"),
-                transcription=note.get("transcription", ""),
-                summary=note.get("summary", ""),
-                tasks=note.get("tasks", []),
-                size_bytes=note.get("size_bytes")
-            ))
-        
-        print(f"✅ /history pour {user_email}: {len(history_list)} notes trouvées.")
-        return history_list
-    except Exception as e:
-        print(f"❌ Erreur critique dans /history pour {user_email}: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erreur interne du serveur lors de la récupération de l'historique: {str(e)}")
-
-# ... (vos autres routes, en vous assurant qu'elles utilisent correctement les _id et gèrent les erreurs)
-
-@app.get("/note-details/{file_id}", response_model=NoteMetadataResponse) # Utiliser le modèle de réponse
+@app.get("/note-details/{file_id}", response_model=NoteMetadata)
 async def get_note_details(file_id: str):
-    print(f"➡️ /note-details REQUÊTE Reçue pour file_id: {file_id}")
-    try:
-        # file_id est déjà une chaîne (venant de l'URL), il correspond à _id dans notes_collection
-        note = notes_collection.find_one({"_id": file_id})
-        if not note:
-            print(f"⚠️ Note non trouvée pour _id={file_id} dans /note-details")
-            raise HTTPException(status_code=404, detail="Note introuvable")
-        
-        print(f"✅ Note trouvée pour _id={file_id}: {note.get('filename')}")
-        return NoteMetadataResponse(
-            id=str(note["_id"]),
-            user_id=note["user_id"], # Assurez-vous que ce champ existe après les modifs
-            filename=note["filename"],
-            uploaded_at=note["uploaded_at"],
-            content_type=note.get("content_type"),
-            transcription=note.get("transcription", ""),
-            summary=note.get("summary", ""),
-            tasks=note.get("tasks", []),
-            size_bytes=note.get("size_bytes")
-        )
-    except Exception as e:
-        print(f"❌ Erreur critique dans /note-details pour file_id {file_id}: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erreur interne du serveur lors de la récupération des détails de la note: {str(e)}")
+    note = notes_collection.find_one({"_id": file_id})
+    if not note:
+        raise HTTPException(status_code=404, detail="Note introuvable")
+    return {
+        "id": note["_id"],
+        "filename": note["filename"],
+        "uploaded_at": note["uploaded_at"],
+        "transcription": note.get("transcription", ""),
+        "summary": note.get("summary", ""),
+        "tasks": note.get("tasks", [])
+    }
 
+@app.get("/history/{user_email}")
+async def get_user_history(user_email: str):
+    notes = list(notes_collection.find({"filename": {"$exists": True}}))
+    return [
+        {
+            "id": str(note.get("_id", "")),
+            "filename": note.get("filename", ""),
+            "uploaded_at": note.get("uploaded_at", ""),
+            "transcription": note.get("transcription", ""),
+            "summary": note.get("summary", ""),
+            "tasks": note.get("tasks", [])
+        }
+        for note in notes
+    ]
 
-@app.get("/audio/{file_id}") # file_id ici est l'_id de GridFS (et de la collection notes)
-async def stream_audio(file_id: str):
-    print(f"➡️ /audio REQUÊTE Reçue pour file_id: {file_id}")
+@app.get("/audio/{file_id}")
+def stream_audio(file_id: str):
     try:
-        # Convertir file_id (chaîne) en ObjectId pour GridFS
         grid_out = fs.get(ObjectId(file_id))
-        print(f"✅ Fichier audio trouvé dans GridFS pour ID: {file_id}, type: {grid_out.content_type}")
-        # Le frontend s'attend à 'audio/webm', mais il est mieux de renvoyer le type réel
-        return StreamingResponse(grid_out, media_type=grid_out.content_type or "application/octet-stream")
-    except gridfs.errors.NoFile:
-        print(f"⚠️ Aucun fichier dans GridFS pour ID: {file_id}")
-        raise HTTPException(status_code=404, detail="Fichier audio non trouvé dans GridFS")
-    except Exception as e:
-        print(f"❌ Erreur critique dans /audio pour file_id {file_id}: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erreur interne du serveur lors du streaming audio: {str(e)}")
+        return StreamingResponse(grid_out, media_type="audio/webm")
+    except:
+        raise HTTPException(status_code=404, detail="Fichier audio non trouvé")
 
-
-# Endpoint racine
 @app.get("/")
 def root():
-    return {"message": "NoteAI + MongoDB GridFS backend is running"}
-
-# Si vous exécutez avec uvicorn directement (pour test local)
-# import uvicorn
-# if __name__ == "__main__":
-# uvicorn.run(app, host="0.0.0.0", port=8000)
+    return {"message": "NoteAI backend with OpenRouter summary + tasks"}
