@@ -28,7 +28,7 @@ db = client["noteai"]
 fs = gridfs.GridFS(db)
 notes_collection = db["notes"]
 
-model = whisper.load_model("base")
+model = whisper.load_model("tiny")
 
 class NoteMetadataResponse(BaseModel):
     id: str
