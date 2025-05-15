@@ -27,8 +27,7 @@ except ImportError:
     print("⚠️ Module 'auth' non trouvé. Auth désactivée.")
 
 # --- MongoDB ---
-MONGO_CONNECTION_STRING = "mongodb+srv://sadokbenali:CuB9RsvafoZ2IZyj@noteai.odx94om.mongodb.net/?retryWrites=true&w=majority&appName=NoteAI"
-client = MongoClient(MONGO_CONNECTION_STRING)
+client = MongoClient("mongodb+srv://sadokbenali:CuB9RsvafoZ2IZyj@noteai.odx94om.mongodb.net/?retryWrites=true&w=majority&appName=NoteAI")
 db = client["noteai"]
 fs = gridfs.GridFS(db)
 notes_collection = db["notes"]
@@ -47,6 +46,8 @@ class NoteMetadataResponse(BaseModel):
     summary: Optional[str] = ""
     tasks: Optional[List[str]] = []
     size_bytes: Optional[int] = None
+    custom_name: Optional[str] = None
+    comment: Optional[str] = None
 
 def ask_openrouter(transcription: str, prompt: str) -> str:
     try:
@@ -69,7 +70,12 @@ def ask_openrouter(transcription: str, prompt: str) -> str:
         return "Non disponible."
 
 @app.post("/upload-audio")
-async def upload_audio(file: UploadFile = File(...), user_id: str = Form(...)):
+async def upload_audio(
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
+    custom_name: Optional[str] = Form(None),
+    comment: Optional[str] = Form(None)
+):
     try:
         content = await file.read()
         file_size = len(content)
@@ -91,6 +97,8 @@ async def upload_audio(file: UploadFile = File(...), user_id: str = Form(...)):
             "_id": file_id_str,
             "user_id": user_id,
             "filename": file.filename,
+            "custom_name": custom_name,
+            "comment": comment,
             "uploaded_at": datetime.datetime.utcnow().isoformat(),
             "content_type": file.content_type,
             "size_bytes": file_size,
@@ -102,17 +110,7 @@ async def upload_audio(file: UploadFile = File(...), user_id: str = Form(...)):
         notes_collection.insert_one(metadata)
         return {
             "message": "Fichier téléversé et traité",
-            "metadata": {
-                "id": file_id_str,
-                "user_id": user_id,
-                "filename": file.filename,
-                "uploaded_at": metadata["uploaded_at"],
-                "content_type": file.content_type,
-                "size_bytes": file_size,
-                "transcription": transcription,
-                "summary": summary,
-                "tasks": tasks
-            }
+            "metadata": metadata
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -120,34 +118,14 @@ async def upload_audio(file: UploadFile = File(...), user_id: str = Form(...)):
 @app.get("/history/{user_email}", response_model=List[NoteMetadataResponse])
 async def get_user_history(user_email: str):
     notes = notes_collection.find({"user_id": user_email}).sort("uploaded_at", -1)
-    return [NoteMetadataResponse(
-        id=str(note["_id"]),
-        user_id=note["user_id"],
-        filename=note["filename"],
-        uploaded_at=note["uploaded_at"],
-        content_type=note.get("content_type"),
-        transcription=note.get("transcription", ""),
-        summary=note.get("summary", ""),
-        tasks=note.get("tasks", []),
-        size_bytes=note.get("size_bytes")
-    ) for note in notes]
+    return [NoteMetadataResponse(**{**note, "id": str(note["_id"])}) for note in notes]
 
 @app.get("/note-details/{file_id}", response_model=NoteMetadataResponse)
 async def get_note_details(file_id: str):
     note = notes_collection.find_one({"_id": file_id})
     if not note:
         raise HTTPException(status_code=404, detail="Note introuvable")
-    return NoteMetadataResponse(
-        id=file_id,
-        user_id=note["user_id"],
-        filename=note["filename"],
-        uploaded_at=note["uploaded_at"],
-        content_type=note.get("content_type"),
-        transcription=note.get("transcription", ""),
-        summary=note.get("summary", ""),
-        tasks=note.get("tasks", []),
-        size_bytes=note.get("size_bytes")
-    )
+    return NoteMetadataResponse(**{**note, "id": str(note["_id"])})
 
 @app.get("/audio/{file_id}")
 def stream_audio(file_id: str):
