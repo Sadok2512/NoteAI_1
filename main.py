@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
-import datetime, whisper, os, requests
+import datetime, os, requests
 from pymongo import MongoClient
 import gridfs
 from bson import ObjectId
@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 OPENROUTER_API_KEY = "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"
 
-app = FastAPI(title="NoteAI Split Processing")
+app = FastAPI(title="NoteAI Split Processing (no Whisper)")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
@@ -19,16 +19,13 @@ app.add_middleware(
 try:
     from app import auth
     app.include_router(auth.router, prefix="/auth")
-    print("✅ Module auth chargé.")
 except ImportError:
-    print("⚠️ Module 'auth' non trouvé. Auth désactivée.")
+    pass
 
 client = MongoClient("mongodb+srv://sadokbenali:CuB9RsvafoZ2IZyj@noteai.odx94om.mongodb.net/?retryWrites=true&w=majority&appName=NoteAI")
 db = client["noteai"]
 fs = gridfs.GridFS(db)
 notes_collection = db["notes"]
-
-model = whisper.load_model("tiny")
 
 class NoteMetadataResponse(BaseModel):
     id: str
@@ -61,7 +58,6 @@ def ask_openrouter(transcription: str, prompt: str) -> str:
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        print(f"⚠️ Erreur OpenRouter : {e}")
         return "Non disponible."
 
 @app.post("/upload-audio")
@@ -80,10 +76,9 @@ async def upload_audio(
         temp_path = f"/tmp/{file_id_str}.webm"
         with open(temp_path, "wb") as f:
             f.write(content)
-           
-    transcription = "[Transcription désactivée pour test]"      
 
-os.remove(temp_path)
+        transcription = "[Transcription désactivée pour test]"
+        os.remove(temp_path)
 
         metadata = {
             "_id": file_id_str,
@@ -101,10 +96,7 @@ os.remove(temp_path)
         }
 
         notes_collection.insert_one(metadata)
-        return {
-            "message": "Fichier téléversé et transcrit",
-            "metadata": metadata
-        }
+        return {"message": "Fichier reçu sans transcription", "metadata": metadata}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -126,11 +118,7 @@ def process_summary(file_id: str):
         {"$set": {"summary": summary, "tasks": tasks}}
     )
 
-    return {
-        "message": "Résumé et tâches générés.",
-        "summary": summary,
-        "tasks": tasks
-    }
+    return {"message": "Résumé et tâches générés.", "summary": summary, "tasks": tasks}
 
 @app.get("/note-details/{file_id}", response_model=NoteMetadataResponse)
 def get_note_details(file_id: str):
@@ -149,11 +137,9 @@ def stream_audio(file_id: str):
     try:
         grid_out = fs.get(ObjectId(file_id))
         return StreamingResponse(grid_out, media_type=grid_out.content_type or "audio/webm")
-    except gridfs.errors.NoFile:
+    except:
         raise HTTPException(status_code=404, detail="Fichier audio non trouvé")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 def root():
-    return {"message": "Backend NoteAI avec Whisper, résumé différé et champ source"}
+    return {"message": "Backend NoteAI sans transcription active (test)"}
