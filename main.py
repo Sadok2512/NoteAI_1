@@ -67,6 +67,11 @@ async def transcribe_replicate(
 ):
     try:
         print("▶️ Début transcription replicate")
+
+        if not REPLICATE_API_TOKEN:
+            print("❌ Token Replicate manquant.")
+            raise HTTPException(status_code=500, detail="Clé API Replicate manquante.")
+
         content = await file.read()
         file_size = len(content)
         print("📄 Taille fichier:", file_size)
@@ -82,7 +87,7 @@ async def transcribe_replicate(
 
         audio_url = upload_temp_file_to_fileio(temp_path)
         if not audio_url:
-            raise HTTPException(status_code=500, detail="file.io upload failed")
+            raise HTTPException(status_code=500, detail="Échec de l'upload vers file.io")
 
         print("🔁 Envoi à Replicate:", audio_url)
 
@@ -100,12 +105,14 @@ async def transcribe_replicate(
             },
             timeout=90
         )
-        print("📬 Statut Replicate:", response.status_code)
+
+        print("📬 Statut Replicate:", response.status_code, response.text)
         response.raise_for_status()
         prediction = response.json()
         transcription = prediction.get("output", "[Transcription non disponible]")
 
-        os.remove(temp_path)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
         metadata = {
             "_id": file_id_str,
@@ -125,6 +132,15 @@ async def transcribe_replicate(
 
         notes_collection.insert_one(metadata)
         return NoteMetadataResponse(id=file_id_str, **metadata)
+
+    except requests.exceptions.RequestException as re:
+        print("❌ Erreur API Replicate:", re)
+        raise HTTPException(status_code=500, detail="Erreur lors de l'appel à Replicate API.")
+    except Exception as e:
+        tb = traceback.format_exc()
+        print("❌ Erreur transcribe:
+", tb)
+        raise HTTPException(status_code=500, detail="Erreur interne serveur.")
     except Exception as e:
         tb = traceback.format_exc()
         print("❌ Erreur transcribe:
