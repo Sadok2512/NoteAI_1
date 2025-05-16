@@ -6,11 +6,11 @@ from typing import Optional, List
 from pymongo import MongoClient
 from bson import ObjectId
 from pydub.utils import mediainfo
-import datetime, requests, os, gridfs, base64
+import datetime, requests, os, gridfs
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
-app = FastAPI(title="NoteAI + Replicate Whisper + Real Transcription")
+app = FastAPI(title="NoteAI + Replicate Whisper Final")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
@@ -61,9 +61,8 @@ async def transcribe_replicate(
 
         duration_sec = get_audio_duration_seconds(temp_path)
 
-        with open(temp_path, "rb") as f:
-            audio_data = f.read()
-        audio_base64 = f"data:audio/webm;base64,{base64.b64encode(audio_data).decode()}"
+        # ✅ Use public URL instead of base64
+        audio_url = f"https://noteai1-production.up.railway.app/audio/{file_id_str}"
 
         headers = {
             "Authorization": f"Token {REPLICATE_API_TOKEN}",
@@ -76,7 +75,7 @@ async def transcribe_replicate(
             json={
                 "version": "a8f5d465f5f5ad6c50413e4f5c3f73292f7e43e2c7e15c76502a89cbd8b6ec1e",
                 "input": {
-                    "audio": audio_base64
+                    "audio": audio_url
                 }
             },
             timeout=60
@@ -108,6 +107,14 @@ async def transcribe_replicate(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/audio/{file_id}")
+def stream_audio(file_id: str):
+    try:
+        grid_out = fs.get(ObjectId(file_id))
+        return StreamingResponse(grid_out, media_type=grid_out.content_type or "audio/webm")
+    except:
+        raise HTTPException(status_code=404, detail="Fichier audio non trouvé")
+
 @app.get("/")
 def root():
-    return {"message": "Backend NoteAI avec transcription réelle Replicate (corrigée)"}
+    return {"message": "Backend NoteAI avec transcription Replicate (via URL publique)"}
