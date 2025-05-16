@@ -1,109 +1,36 @@
-
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from pymongo import MongoClient
-from passlib.context import CryptContext
-from jose import jwt
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
+from bson import ObjectId
+import jwt
 import os
-import requests
-
-# Load environment variables from .env
-load_dotenv()
 
 router = APIRouter()
 
-# Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret-key-for-dev")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+# Connexion MongoDB
+client = MongoClient("mongodb+srv://sadokbenali:CuB9RsvafoZ2IZyj@noteai.odx94om.mongodb.net/?retryWrites=true&w=majority&appName=NoteAI")
+db = client["noteai"]
+users_collection = db["users"]
 
-MONGO_URI = os.getenv("MONGO_URI")
-if not MONGO_URI:
-    raise ValueError("MONGO_URI must be set in environment")
+# Clé secrète JWT (à sécuriser dans un environnement réel)
+SECRET_KEY = os.getenv("JWT_SECRET", "secret123")
 
-try:
-    client = MongoClient(MONGO_URI)
-    db = client["noteai"]
-    users_collection = db["users"]
-except Exception as e:
-    raise ConnectionError(f"Failed to connect to MongoDB: {str(e)}")
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# Models
-class AuthData(BaseModel):
-    email: EmailStr
+class LoginRequest(BaseModel):
+    email: str
     password: str
 
-class GoogleToken(BaseModel):
-    token: str
-
-# Helper
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-# Routes
-@router.post("/register")
-def register_user(data: AuthData):
-    existing_user = users_collection.find_one({"email": data.email})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    hashed_password = pwd_context.hash(data.password)
-    user = {"email": data.email, "password": hashed_password}
-    result = users_collection.insert_one(user)
-
-    token = create_access_token({"sub": data.email})
-    return {
-        "user_id": str(result.inserted_id),
-        "email": data.email,
-        "token": token
-    }
-
 @router.post("/login")
-def login_user(data: AuthData):
-    user = users_collection.find_one({"email": data.email})
-    if not user or not pwd_context.verify(data.password, user["password"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+async def login_user(data: LoginRequest):
+    user = users_collection.find_one({"email": data.email, "password": data.password})  # ⚠️ En production, utilisez des mots de passe hashés !
 
-    token = create_access_token({"sub": data.email})
-    return {
-        "user_id": str(user["_id"]),
-        "email": data.email,
-        "token": token
-    }
-
-@router.post("/google")
-def google_auth(data: GoogleToken):
-    credential = data.token  # ✅ correspond maintenant à { "token": "..." }
-
-    GOOGLE_TOKEN_INFO_URL = "https://oauth2.googleapis.com/tokeninfo"
-    response = requests.get(GOOGLE_TOKEN_INFO_URL, params={"id_token": credential})
-    if response.status_code != 200:
-        raise HTTPException(status_code=401, detail="Invalid Google token")
-
-    user_info = response.json()
-    email = user_info.get("email")
-    if not email:
-        raise HTTPException(status_code=400, detail="Email not found in Google token")
-
-    user = users_collection.find_one({"email": email})
     if not user:
-        new_user = {"email": email, "password": None}
-        result = users_collection.insert_one(new_user)
-        user_id = str(result.inserted_id)
-    else:
-        user_id = str(user["_id"])
+        raise HTTPException(status_code=401, detail="Email ou mot de passe invalide.")
 
-    jwt_token = create_access_token({"sub": email})
+    user_id = str(user["_id"])
+    token = jwt.encode({"user_id": user_id}, SECRET_KEY, algorithm="HS256")
 
     return {
-        "user_id": user_id,
-        "email": email,
-        "token": jwt_token
+        "token": token,
+        "email": user["email"],
+        "user_id": user_id
     }
