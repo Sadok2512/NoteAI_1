@@ -6,7 +6,7 @@ from typing import Optional, List
 from pymongo import MongoClient
 from bson import ObjectId
 from pydub.utils import mediainfo
-import datetime, requests, os, gridfs
+import datetime, requests, os, gridfs, base64
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
@@ -61,17 +61,13 @@ async def transcribe_replicate(
 
         duration_sec = get_audio_duration_seconds(temp_path)
 
-        # ✅ Call Replicate Whisper
+        with open(temp_path, "rb") as f:
+            audio_data = f.read()
+        audio_base64 = f"data:audio/webm;base64,{base64.b64encode(audio_data).decode()}"
+
         headers = {
             "Authorization": f"Token {REPLICATE_API_TOKEN}",
             "Content-Type": "application/json"
-        }
-        with open(temp_path, "rb") as f:
-            audio_data = f.read()
-
-        audio_base64 = f"data:audio/webm;base64,{audio_data.encode('base64')}"  # simulate base64 encoding
-        input_data = {
-            "audio": audio_base64
         }
 
         response = requests.post(
@@ -79,7 +75,9 @@ async def transcribe_replicate(
             headers=headers,
             json={
                 "version": "a8f5d465f5f5ad6c50413e4f5c3f73292f7e43e2c7e15c76502a89cbd8b6ec1e",
-                "input": input_data
+                "input": {
+                    "audio": audio_base64
+                }
             },
             timeout=60
         )
@@ -112,4 +110,4 @@ async def transcribe_replicate(
 
 @app.get("/")
 def root():
-    return {"message": "Backend NoteAI avec transcription réelle Replicate"}
+    return {"message": "Backend NoteAI avec transcription réelle Replicate (corrigée)"}
