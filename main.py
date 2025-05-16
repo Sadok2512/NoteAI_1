@@ -138,14 +138,8 @@ async def transcribe_replicate(
         raise HTTPException(status_code=500, detail="Erreur lors de l'appel à Replicate API.")
     except Exception as e:
         tb = traceback.format_exc()
-        print("❌ Erreur transcribe:
-", tb)
+        print("❌ Erreur transcribe:\n", tb)
         raise HTTPException(status_code=500, detail="Erreur interne serveur.")
-    except Exception as e:
-        tb = traceback.format_exc()
-        print("❌ Erreur transcribe:
-", tb)
-        raise HTTPException(status_code=500, detail=tb)
 
 @app.get("/")
 def root():
