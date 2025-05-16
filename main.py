@@ -6,13 +6,13 @@ from typing import Optional, List
 from pymongo import MongoClient
 from bson import ObjectId
 from pydub.utils import mediainfo
-import datetime, requests, os, gridfs
+import datetime, requests, os, gridfs, traceback
 
-from app import auth  # 🔐 auth router
+from app import auth
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
-app = FastAPI(title="NoteAI Final - Replicate + file.io + Auth")
+app = FastAPI(title="NoteAI Debug Transcribe Replicate")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
@@ -28,7 +28,8 @@ notes_collection = db["notes"]
 def get_audio_duration_seconds(path: str) -> float:
     try:
         return float(mediainfo(path)["duration"])
-    except:
+    except Exception as e:
+        print("Erreur durée audio:", e)
         return 0.0
 
 def upload_temp_file_to_fileio(path: str) -> str:
@@ -36,8 +37,7 @@ def upload_temp_file_to_fileio(path: str) -> str:
         with open(path, "rb") as f:
             res = requests.post("https://file.io", files={"file": f})
         link = res.json().get("link")
-        if not link:
-            raise Exception("file.io upload failed.")
+        print("Lien file.io:", link)
         return link
     except Exception as e:
         print("Erreur upload file.io:", e)
@@ -66,8 +66,11 @@ async def transcribe_replicate(
     comment: Optional[str] = Form(None)
 ):
     try:
+        print("▶️ Début transcription replicate")
         content = await file.read()
         file_size = len(content)
+        print("📄 Taille fichier:", file_size)
+
         file_id = fs.put(content, filename=file.filename, content_type=file.content_type)
         file_id_str = str(file_id)
 
@@ -76,9 +79,12 @@ async def transcribe_replicate(
             f.write(content)
 
         duration_sec = get_audio_duration_seconds(temp_path)
+
         audio_url = upload_temp_file_to_fileio(temp_path)
         if not audio_url:
             raise HTTPException(status_code=500, detail="file.io upload failed")
+
+        print("🔁 Envoi à Replicate:", audio_url)
 
         headers = {
             "Authorization": f"Token {REPLICATE_API_TOKEN}",
@@ -90,12 +96,11 @@ async def transcribe_replicate(
             headers=headers,
             json={
                 "version": "a8f5d465f5f5ad6c50413e4f5c3f73292f7e43e2c7e15c76502a89cbd8b6ec1e",
-                "input": {
-                    "audio": audio_url
-                }
+                "input": {"audio": audio_url}
             },
             timeout=90
         )
+        print("📬 Statut Replicate:", response.status_code)
         response.raise_for_status()
         prediction = response.json()
         transcription = prediction.get("output", "[Transcription non disponible]")
@@ -121,8 +126,11 @@ async def transcribe_replicate(
         notes_collection.insert_one(metadata)
         return NoteMetadataResponse(id=file_id_str, **metadata)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        tb = traceback.format_exc()
+        print("❌ Erreur transcribe:
+", tb)
+        raise HTTPException(status_code=500, detail=tb)
 
 @app.get("/")
 def root():
-    return {"message": "NoteAI backend avec Replicate + Auth + Transcription réelle"}
+    return {"message": "NoteAI backend debug avec replicate + traceback"}
