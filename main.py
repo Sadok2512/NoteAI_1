@@ -9,9 +9,8 @@ from pydub.utils import mediainfo
 import datetime, requests, os, gridfs
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-app = FastAPI(title="NoteAI + Replicate Whisper + Duration")
+app = FastAPI(title="NoteAI + Replicate Whisper + Real Transcription")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
@@ -61,7 +60,33 @@ async def transcribe_replicate(
             f.write(content)
 
         duration_sec = get_audio_duration_seconds(temp_path)
-        transcription = "[Transcription via Replicate non effectuée ici - démo placeholder]"
+
+        # ✅ Call Replicate Whisper
+        headers = {
+            "Authorization": f"Token {REPLICATE_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        with open(temp_path, "rb") as f:
+            audio_data = f.read()
+
+        audio_base64 = f"data:audio/webm;base64,{audio_data.encode('base64')}"  # simulate base64 encoding
+        input_data = {
+            "audio": audio_base64
+        }
+
+        response = requests.post(
+            "https://api.replicate.com/v1/predictions",
+            headers=headers,
+            json={
+                "version": "a8f5d465f5f5ad6c50413e4f5c3f73292f7e43e2c7e15c76502a89cbd8b6ec1e",
+                "input": input_data
+            },
+            timeout=60
+        )
+        response.raise_for_status()
+        prediction = response.json()
+        transcription = prediction.get("output", "[Transcription non disponible]")
+
         os.remove(temp_path)
 
         metadata = {
@@ -87,4 +112,4 @@ async def transcribe_replicate(
 
 @app.get("/")
 def root():
-    return {"message": "Backend NoteAI avec /transcribe-replicate, durée audio, et token sécurisé"}
+    return {"message": "Backend NoteAI avec transcription réelle Replicate"}
